@@ -1,68 +1,161 @@
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+# Setting up CodeBuild locally and using buildspec file to build a React App (CRA)
 
-## Available Scripts
+Local support for CodeBuild is extremely useful if you want save money and not use the AWS CodeBuild to build (for testing). Instead, run the builds locally when in development phase and trying to get things working. Once you get it building successfully, use the buildspec.yml in AWS CodeBuild project itself.
 
-In the project directory, you can run:
+At first, I wasn’t aware of this and I used CodeBuild entirely in learning phase. When I saw my bill, it was shocking. Then my mentor,  Paul Kukiel, recommended me this. It was a life saver.
 
-### `yarn start`
+## Setting up build process
 
-Runs the app in the development mode.<br />
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+### Step 1
 
-The page will reload if you make edits.<br />
-You will also see any lint errors in the console.
+Clone this repository in your workspace
 
-### `yarn test`
+`git clone https://github.com/aws/aws-codebuild-docker-images.git`
 
-Launches the test runner in the interactive watch mode.<br />
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+![](/images/step1.png)
 
-### `yarn build`
+### Step 2
 
-Builds the app for production to the `build` folder.<br />
-It correctly bundles React in production mode and optimizes the build for the best performance.
+Open the repository in your VS Code  and navigate to `/aws-codebuild-docker-images/ubuntu/standard/3.0`
 
-The build is minified and the filenames include the hashes.<br />
-Your app is ready to be deployed!
+![](/images/step2.png)
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+### Step 3
 
-### `yarn eject`
+Open Dockerfile present in `/aws-codebuild-docker-images/ubuntu/standard/3.0` to build a local CodeBuild standard 3.0 image
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+![](/images/step3.png)
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+### Step 4
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+Remove the last line in that file that says `ENTRYPOINT [“dockerd-entrypoint.sh”]`
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+![](/images/step4.png)
 
-## Learn More
+### Step 5
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+Run the below commands in /aws-codebuild-docker-images/ubuntu/standard/3.0. This will build the docker image locally. Ensure your Docker is running.
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+`docker build -t aws/codebuild/standard:3.0 .`
 
-### Code Splitting
+![](/images/step5.png)
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/code-splitting
+### Step 6
 
-### Analyzing the Bundle Size
+Now we need to setup the local CodeBuild agent
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size
+#### Step 6.1
 
-### Making a Progressive Web App
+Get the latest by running
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app
+`docker pull amazon/aws-codebuild-local:latest --disable-content-trust=false`
 
-### Advanced Configuration
+![](/images/step6.1.png)
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/advanced-configuration
+#### Step 6.2
 
-### Deployment
+Run the below commands to download the file codebuild_build.sh that contains all the magic that will be executed to build locally and give it execution permission. 
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/deployment
+ If you don’t have “wget” install, run “brew install wget”
 
-### `yarn build` fails to minify
+`brew install wget` (skip if you already have it)
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify
+`wget https://raw.githubusercontent.com/aws/aws-codebuild-docker-images/master/local_builds/codebuild_build.sh`
+
+`chmod +x codebuild_build.sh`
+
+![](/images/step6.2.png)
+
+## Buiding A React App Using buildspec.yml and upload to S3
+
+Create React App (CRA) is a tool created by Facebook to create React applications in the single command in terminal. If you don't have an exisiting project, create one with `create-react-app`
+
+`buildspec.yml` file is where all the commands are written to be executed in order to get and build everything the project needs to run successfully
+
+### Step 1:
+
+Navigate to your project's folder and create a file buildspec.yml at the root. The file has to be named exactly that as CodeBuild looks for it to do the build
+
+`cd your-project-folder-name`
+
+`touch buildspec.yml`
+
+### Step 2
+
+Paste the below code in your buildspec.yml file
+
+Please add a bucket name in SSM (AWS Systems Manager Parameter Store) as we will fetch the bucket name from there
+
+```
+version: 0.2
+
+env:
+  parameter-store:
+    BUCKET: /codebuild/bucketName
+
+phases:
+  install:
+    commands:
+        - npm install
+  build:
+    commands:
+        - npm run build
+        - aws s3 sync build/ s3://$BUCKET
+ 
+ ```
+
+Code Explanation
+
+`version: 0.2` - Represents what version of buildspec is being used. 
+
+`env` -  Represents information for custom environment variables
+
+`parameter-store` -  To retrieve custom environment variable from AWS System Manager Parameter Store (SSM). Store values as key: value pairs
+
+`BUCKET` - Denotes the use of S3 bucket
+
+`/codebuild/bucketName` - Naming convention to name parameters in SSM such as /{serviceName}/{parameterName}
+
+`phases` - CodeBuild has different phases however, we only use install and build. Each of these phases contain their respective commands to run.
+
+`install` - Sections runs commands to install all the necessary tools needed to build installed for the project
+
+`npm install` - Downloads a package an its dependencies
+
+`build` - Section that runs commands required to build the project
+
+`npm run build` -  Outputs the production ready version of the application in a separate folder buildwhich doesn’t contain source code.
+
+`aws s3 sync build/ s3://$BUCKET` - This uploads the contents of build folder to S3. You may have noticed “BUCKET” prefixed with a dollar $ sign. This is necessary for the runtime to know that it’s an environmental variable.
+
+### Step 3
+
+Now, open up terminal and navigate to the clone git repository aws-codebuild-docker-images (see step 1 if unsure) and run below command:
+
+`./codebuild_build.sh -i aws/codebuild/standard:3.0 -a ~/Desktop -s ~/workspace/create-react-app -c ~/.aws`
+
+This is how it’s being used:
+
+`$ codebuild_build.sh [-i image_name] [-a artifact_output_directory] [options]`
+
+`-i` - Specifies the build image (from step 5)
+
+`-a` - Specifies the output directory
+
+`-s` - Specifies directory where buildspec is located
+
+`-c` -  Specifies the folder that contains AWS configurations and credentials (usually in your home directory)
+
+### Step 4
+
+Create S3 bucket and name it as appropriate
+
+### Step 5
+
+If everything goes well, you should see you React application in S3
+
+![](/images/s3-before-upload.png)
+
+Hope it helped and you’re all up and running. If you faced any problems, let me know in the comments.
+
+![](/images/s3-after-upload.png)
